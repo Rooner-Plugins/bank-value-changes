@@ -4,16 +4,33 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 
-@ConfigGroup("example")
+@ConfigGroup("bankvaluechanges")
 public interface BankValueChangesConfig extends Config
 {
+	enum TimeScale {
+		HOUR,
+		DAY,
+		WEEK,
+		MONTH
+	}
+
 	@ConfigItem(
-		keyName = "greeting",
-		name = "Welcome Greeting",
-		description = "The message to show to the user when they login"
+		keyName = "showOverlay",
+		name = "Show Price Diff Overlay",
+		description = "If you don't want to have the overlay on all the time, uncheck this. Turning off the plugin will disable collecting data points.",
+		position = 1
 	)
-	default String greeting()
-	{
-		return "Hello";
+	default boolean showOverlay() {
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "timeScale",
+		name = "Choose a time range",
+		description = "The time range for which you wish to inspect your items' value change",
+		position = 2
+	)
+	default TimeScale chooseTimeScale() {
+		return TimeScale.HOUR;
 	}
 }

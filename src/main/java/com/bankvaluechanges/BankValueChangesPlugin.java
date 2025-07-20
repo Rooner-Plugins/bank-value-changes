@@ -1,53 +1,273 @@
 package com.bankvaluechanges;
 
-import com.google.inject.Provides;
 import javax.inject.Inject;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.inject.Provides;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
-import net.runelite.api.GameState;
-import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.ScriptID;
+import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.Widget;
+import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ClientShutdown;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.overlay.OverlayManager;
 
-@Slf4j
+import java.io.File;
+import java.io.IOException;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ScheduledExecutorService;
+
 @PluginDescriptor(
-	name = "Example"
+    name = "Bank Value Changes",
+    description = "Notice your bank value dropping or increasing without a perceptible cause? Keep track of the changes in value that your items experience from time to time!",
+    tags = {"bank", "price", "value", "tracker"}
 )
-public class BankValueChangesPlugin extends Plugin
-{
-	@Inject
-	private Client client;
+@Slf4j
+public class BankValueChangesPlugin extends Plugin {
+    public static final Long HOUR_IN_MILLIS = 60 * 60 * 1000L;
+    public static final Long DAY_IN_MILLIS = 24 * HOUR_IN_MILLIS;
+    public static final Long WEEK_IN_MILLIS = 7 * DAY_IN_MILLIS;
+    public static final Long MONTH_IN_MILLIS = 30 * DAY_IN_MILLIS;
+    public static final String DATA_FOLDER = "bank-value-changes";
+    public static final String DATA_FILE_NAME = "priceHistoryData.json";
+    public static final File PRICE_HISTORY_DATA_DIR;
+    public static Gson GSON;
+    private static Long timeBand;
+    private final ArrayList<PriceSnapshot> priceSnapshots = new ArrayList<>();
+    public Map<Integer, Double> valueChanges = new HashMap<>();
 
-	@Inject
-	private BankValueChangesConfig config;
+    static
+    {
+        PRICE_HISTORY_DATA_DIR = new File(RuneLite.RUNELITE_DIR, DATA_FOLDER);
+        PRICE_HISTORY_DATA_DIR.mkdirs();
+    }
 
-	@Override
-	protected void startUp() throws Exception
-	{
-		log.info("Example started!");
-	}
+    @Inject
+    private ItemManager itemManager;
 
-	@Override
-	protected void shutDown() throws Exception
-	{
-		log.info("Example stopped!");
-	}
+    @Inject
+    private Client client;
 
-	@Subscribe
-	public void onGameStateChanged(GameStateChanged gameStateChanged)
-	{
-		if (gameStateChanged.getGameState() == GameState.LOGGED_IN)
-		{
-			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "Example says " + config.greeting(), null);
-		}
-	}
+    @Inject
+    private BankValueChangesConfig config;
 
-	@Provides
-	BankValueChangesConfig provideConfig(ConfigManager configManager)
-	{
-		return configManager.getConfig(BankValueChangesConfig.class);
-	}
+    @Inject
+    private BankValueChangesOverlay overlay;
+
+    @Inject
+    private OverlayManager overlayManager;
+
+    @Inject
+    private ScheduledExecutorService executor;
+
+    @Override
+    protected void startUp() throws Exception {
+        GsonBuilder builder = new GsonBuilder();
+        GSON = builder.create();
+        overlayManager.add(overlay);
+        loadPriceData();
+        setTimeBand(config.chooseTimeScale());
+        populateDifferenceMap();
+    }
+
+    @Override
+    protected void shutDown() throws Exception {
+        savePriceData();
+        priceSnapshots.clear();
+        overlayManager.remove(overlay);
+    }
+
+    @Subscribe
+    public void onScriptPreFired(ScriptPreFired event) {
+        if (event.getScriptId() != ScriptID.BANKMAIN_FINISHBUILDING) {
+            return;
+        }
+
+        // Don't update upon opening tabs other than the main one
+        if (client.getVarbitValue(VarbitID.BANK_CURRENTTAB) != 0) {
+            return;
+        }
+
+        if (!priceSnapshots.isEmpty()) {
+            // Compare time with latest entry, if within an hour of latest entry, don't update
+            PriceSnapshot latest = priceSnapshots.get(priceSnapshots.size() - 1);
+            if (System.currentTimeMillis() <= latest.getTimestamp() + HOUR_IN_MILLIS) {
+                return;
+            }
+        }
+
+        final Widget widget = client.getWidget(InterfaceID.Bankmain.ITEMS);
+        final ItemContainer itemContainer = client.getItemContainer(InventoryID.BANK);
+        final Widget[] children = widget.getChildren();
+
+        if (itemContainer == null || children == null) {
+            return;
+        }
+
+        PriceSnapshot snapshot = new PriceSnapshot(System.currentTimeMillis());
+        for (int i = 0; i < itemContainer.size(); ++i) {
+            Widget child = children[i];
+            if (child != null && !child.isSelfHidden() && child.getItemId() > -1)
+            {
+                int id = child.getItemId();
+                int gePrice = itemManager.getItemPrice(id);
+                if (gePrice > 0) { // Item is tradable
+                    snapshot.addPriceData(new PriceData(id, gePrice));
+                }
+            }
+        }
+
+        priceSnapshots.add(snapshot);
+        priceSnapshots.sort(PriceSnapshot::compareTo);
+        populateDifferenceMap();
+    }
+
+    @Subscribe
+    public void onClientShutdown(ClientShutdown event) {
+        event.waitFor(executor.submit(this::savePriceData));
+    }
+
+    @Subscribe
+    public void onConfigChanged(ConfigChanged event) {
+        if (!event.getGroup().equals("bankvaluechanges")) {
+            return;
+        }
+
+        if (event.getNewValue() == null) {
+            return;
+        }
+
+        if (event.getKey().equals("timeScale")) {
+            setTimeBand(config.chooseTimeScale());
+            populateDifferenceMap();
+        }
+    }
+
+    private void setTimeBand(BankValueChangesConfig.TimeScale scale) {
+        switch(scale) {
+            case HOUR:
+                timeBand = HOUR_IN_MILLIS;
+                break;
+            case DAY:
+                timeBand = DAY_IN_MILLIS;
+                break;
+            case WEEK:
+                 timeBand = WEEK_IN_MILLIS;
+                 break;
+            case MONTH:
+                timeBand = MONTH_IN_MILLIS;
+                break;
+        }
+    }
+
+    private void savePriceData() {
+        File dataFile = new File(PRICE_HISTORY_DATA_DIR, DATA_FILE_NAME);
+
+        try {
+            String jsonData = GSON.toJson(priceSnapshots);
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(dataFile, StandardCharsets.UTF_8))) {
+                writer.write(jsonData);
+            }
+        } catch (IOException e) {
+            log.error("Error while saving price history data: ", e);
+        } catch (Exception e) {
+            log.error("Error: ", e);
+        }
+    }
+
+    private void loadPriceData() {
+        File dataFile = new File(PRICE_HISTORY_DATA_DIR, DATA_FILE_NAME);
+
+        if (!dataFile.exists()) {
+            return;
+        }
+
+        try {
+            String jsonData = Files.readString(dataFile.toPath(), StandardCharsets.UTF_8);
+            List<PriceSnapshot> snapshots = Arrays.asList(GSON.fromJson(jsonData, PriceSnapshot[].class));
+            updateSnapshots(snapshots);
+        } catch (IOException e) {
+            log.error("Error while loading price history data: ", e);
+        } catch (Exception e) {
+            log.error("Error: ", e);
+        }
+    }
+
+    private void updateSnapshots(List<PriceSnapshot> snapshots) {
+        snapshots.removeIf(Objects::isNull);
+        priceSnapshots.addAll(snapshots);
+        priceSnapshots.sort(PriceSnapshot::compareTo);
+    }
+
+    private void populateDifferenceMap() {
+        if (priceSnapshots.isEmpty()) {
+            return;
+        }
+
+        int size = priceSnapshots.size();
+        // Find the oldest snapshot from within the chosen time band
+        for (int i = size - 1; i >= 0; i--) {
+            if (priceSnapshots.get(i).getTimestamp() + timeBand < System.currentTimeMillis()) {
+                // No snapshots within the timeframe
+                if (i == size - 1) {
+                    return;
+                } else {
+                    calculatePriceDiffPercentage(priceSnapshots.get(i + 1));
+                }
+                return;
+            }
+        }
+        // Didn't find any snapshots outside the given time band
+        // so just give the oldest one within it
+        calculatePriceDiffPercentage(priceSnapshots.get(0));
+    }
+
+    private void calculatePriceDiffPercentage(PriceSnapshot snapshot) {
+        PriceSnapshot latest = priceSnapshots.get(priceSnapshots.size() - 1);
+
+        for (PriceData newestData : latest.getPriceData()) {
+            int oldId = newestData.getId();
+            int oldPrice = newestData.getPrice();
+
+            for (PriceData latestData : snapshot.getPriceData()) {
+                int latestId = latestData.getId();
+                int latestPrice = latestData.getPrice();
+
+                if (latestId == oldId) {
+                    valueChanges.put(latestId, percentageChange(oldPrice, latestPrice));
+                    break;
+                }
+            }
+        }
+    }
+
+    private double percentageChange(int oldPrice, int newPrice) {
+        return (double) (newPrice - oldPrice) * 100 / (double) oldPrice;
+    }
+
+    @Provides
+    BankValueChangesConfig provideConfig(ConfigManager configManager) {
+        return configManager.getConfig(BankValueChangesConfig.class);
+    }
 }
