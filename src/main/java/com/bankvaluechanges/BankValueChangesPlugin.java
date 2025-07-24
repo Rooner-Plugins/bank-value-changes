@@ -110,9 +110,9 @@ public class BankValueChangesPlugin extends Plugin {
         }
 
         if (!priceSnapshots.isEmpty()) {
-            // Compare time with latest entry, if within an hour of latest entry, don't update
+            // Compare time with latest entry, if within half an hour of latest entry, don't update
             PriceSnapshot latest = priceSnapshots.get(priceSnapshots.size() - 1);
-            if (System.currentTimeMillis() <= latest.getTimestamp() + HOUR_IN_MILLIS) {
+            if (System.currentTimeMillis() <= latest.getTimestamp() + HALF_HOUR_IN_MILLIS) {
                 return;
             }
         }
