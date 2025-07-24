@@ -250,19 +250,19 @@ public class BankValueChangesPlugin extends Plugin {
         calculatePriceDiffPercentage(priceSnapshots.get(0));
     }
 
-    private void calculatePriceDiffPercentage(PriceSnapshot snapshot) {
+    private void calculatePriceDiffPercentage(PriceSnapshot oldest) {
         PriceSnapshot latest = priceSnapshots.get(priceSnapshots.size() - 1);
 
-        for (PriceData newestData : latest.getPriceData()) {
-            int oldId = newestData.getId();
-            int oldPrice = newestData.getPrice();
+        for (PriceData latestData : latest.getPriceData()) {
+            int latestId = latestData.getId();
+            int latestPrice = latestData.getPrice();
 
-            for (PriceData latestData : snapshot.getPriceData()) {
-                int latestId = latestData.getId();
-                int latestPrice = latestData.getPrice();
+            for (PriceData item : oldest.getPriceData()) {
+                int oldestId = item.getId();
+                int olderPrice = item.getPrice();
 
-                if (latestId == oldId) {
-                    valueChanges.put(latestId, percentageChange(oldPrice, latestPrice));
+                if (latestId == oldestId) {
+                    valueChanges.put(latestId, percentageChange(olderPrice, latestPrice));
                     break;
                 }
             }
