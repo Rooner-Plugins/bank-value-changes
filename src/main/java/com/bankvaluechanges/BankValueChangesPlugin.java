@@ -3,7 +3,6 @@ package com.bankvaluechanges;
 import javax.inject.Inject;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.inject.Provides;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -81,10 +80,12 @@ public class BankValueChangesPlugin extends Plugin {
     @Inject
     private ScheduledExecutorService executor;
 
+    @Inject
+    private Gson gson;
+
     @Override
     protected void startUp() throws Exception {
-        GsonBuilder builder = new GsonBuilder();
-        GSON = builder.create();
+        GSON = gson.newBuilder().create();
         overlayManager.add(overlay);
         loadPriceData();
         setTimeBand(config.chooseTimeScale());
