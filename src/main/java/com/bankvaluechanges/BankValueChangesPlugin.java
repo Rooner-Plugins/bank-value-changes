@@ -44,7 +44,9 @@ import java.util.concurrent.ScheduledExecutorService;
 )
 @Slf4j
 public class BankValueChangesPlugin extends Plugin {
-    public static final Long HOUR_IN_MILLIS = 60 * 60 * 1000L;
+    public static final Long HALF_HOUR_IN_MILLIS = 30 * 60 * 1000L;
+    public static final Long HOUR_IN_MILLIS = 2 * HALF_HOUR_IN_MILLIS;
+    public static final Long HALF_DAY_IN_MILLIS = 12 * HOUR_IN_MILLIS;
     public static final Long DAY_IN_MILLIS = 24 * HOUR_IN_MILLIS;
     public static final Long WEEK_IN_MILLIS = 7 * DAY_IN_MILLIS;
     public static final Long MONTH_IN_MILLIS = 30 * DAY_IN_MILLIS;
@@ -167,8 +169,8 @@ public class BankValueChangesPlugin extends Plugin {
 
     private void setTimeBand(BankValueChangesConfig.TimeScale scale) {
         switch(scale) {
-            case HOUR:
-                timeBand = HOUR_IN_MILLIS;
+            case HALF_DAY:
+                timeBand = HALF_DAY_IN_MILLIS;
                 break;
             case DAY:
                 timeBand = DAY_IN_MILLIS;
@@ -184,6 +186,10 @@ public class BankValueChangesPlugin extends Plugin {
 
     private void savePriceData() {
         File dataFile = new File(PRICE_HISTORY_DATA_DIR, DATA_FILE_NAME);
+
+        // Remove entries which are outside the longest data viewing window bevo
+        priceSnapshots.removeIf(
+            snapshot -> snapshot.getTimestamp() + MONTH_IN_MILLIS < System.currentTimeMillis());
 
         try {
             String jsonData = GSON.toJson(priceSnapshots);

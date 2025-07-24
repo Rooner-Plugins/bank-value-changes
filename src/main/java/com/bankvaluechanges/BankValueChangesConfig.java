@@ -8,7 +8,7 @@ import net.runelite.client.config.ConfigItem;
 public interface BankValueChangesConfig extends Config
 {
 	enum TimeScale {
-		HOUR,
+		HALF_DAY,
 		DAY,
 		WEEK,
 		MONTH
@@ -31,6 +31,6 @@ public interface BankValueChangesConfig extends Config
 		position = 2
 	)
 	default TimeScale chooseTimeScale() {
-		return TimeScale.HOUR;
+		return TimeScale.HALF_DAY;
 	}
 }
